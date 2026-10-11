@@ -11,6 +11,7 @@ features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Devices_Display",
+  "Win32_UI_HiDpi",
 ]
 
 [target.'cfg(windows)'.dependencies.windows]

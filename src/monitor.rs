@@ -14,6 +14,9 @@ use windows_sys::Win32::Foundation::{LPARAM, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
+use windows_sys::Win32::UI::HiDpi::{
+    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 
 use crate::laptop;
 use crate::names::{friendly_names, wide_to_string};
@@ -174,6 +177,7 @@ pub struct Monitors(pub Vec<Monitor>);
 
 impl Monitors {
     pub fn detect() -> Monitors {
+        dpi_aware();
         let names = friendly_names();
         let mut list = Vec::new();
 
@@ -246,6 +250,15 @@ impl Monitors {
             .map(|m| vec![m])
             .ok_or_else(|| format!("No monitor {n}. Run `monitor-lizard list` to see them."))
     }
+}
+
+/// Ask Windows for real pixels. Without this, a screen at 150% scaling
+/// reports 1536x1024 instead of its true 2304x1536. Runs once per process.
+fn dpi_aware() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    });
 }
 
 /// Every HMONITOR Windows knows about.
