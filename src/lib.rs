@@ -9,6 +9,7 @@ mod laptop;
 #[cfg(not(windows))]
 #[path = "laptop_stub.rs"]
 mod laptop;
+pub mod layout;
 pub mod monitor;
 mod names;
 pub mod vcp;

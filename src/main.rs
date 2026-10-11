@@ -23,6 +23,7 @@ Monitor Lizard - the monitor settings Windows forgot about.
 USAGE:
   monitor-lizard list
   monitor-lizard modes [number]
+  monitor-lizard layout
   monitor-lizard set <number|all> [options]
   monitor-lizard inputs
   monitor-lizard help
@@ -56,6 +57,7 @@ fn main() -> ExitCode {
         None | Some("list") | Some("ls") => list(),
         Some("set") => set(&args[1..]),
         Some("modes") => modes(args.get(1).map(String::as_str)),
+        Some("layout") => layout(),
         Some("doctor") => doctor(),
         Some("inputs") => {
             for (value, name) in vcp::INPUTS {
@@ -126,6 +128,27 @@ fn doctor() -> Result<(), String> {
             Err(e) => e,
         };
         println!("  {} {} [{}] builtin={}  {}", m.index, m.name, m.device, m.builtin, ddc);
+    }
+    Ok(())
+}
+
+/// Where each screen sits, plus its real size.
+fn layout() -> Result<(), String> {
+    let screens = monitor_lizard::layout::read(&Monitors::detect());
+    if screens.is_empty() {
+        return Err("No monitors found.".into());
+    }
+    println!("Arrangement (pixels, primary at 0,0)");
+    for s in &screens {
+        let size = match (s.inches(), s.size_mm) {
+            (Some(inches), Some((w, h))) => format!("{inches:.1}\"  ({w}x{h} mm)"),
+            _ => "size unknown".into(),
+        };
+        let primary = if s.primary { "  (primary)" } else { "" };
+        println!(
+            "{}  {}  {}x{} at ({}, {})   {}{}",
+            s.index, s.name, s.width, s.height, s.x, s.y, size, primary
+        );
     }
     Ok(())
 }

@@ -71,6 +71,9 @@ impl Rotation {
 /// (so a portrait screen reports e.g. 1536x2304).
 #[derive(Clone, Copy)]
 pub struct DisplayMode {
+    /// Top-left corner in the Windows desktop layout (primary is at 0,0).
+    pub x: i32,
+    pub y: i32,
     pub width: u32,
     pub height: u32,
     pub refresh: u32,
@@ -118,7 +121,10 @@ pub fn current(device: &str) -> Result<DisplayMode, String> {
         return Err(format!("Couldn't read display settings for {device}."));
     }
     let rotation = Rotation::from_raw(unsafe { dm.Anonymous1.Anonymous2.dmDisplayOrientation });
+    let position = unsafe { dm.Anonymous1.Anonymous2.dmPosition };
     Ok(DisplayMode {
+        x: position.x,
+        y: position.y,
         width: dm.dmPelsWidth,
         height: dm.dmPelsHeight,
         refresh: dm.dmDisplayFrequency,
@@ -201,7 +207,7 @@ pub fn plan(device: &str, change: &Change) -> Result<DisplayMode, String> {
     dm.Anonymous1.Anonymous2.dmDisplayOrientation = rotation.raw();
     dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_DISPLAYORIENTATION;
 
-    Ok(DisplayMode { width: out_w, height: out_h, refresh, rotation, raw: dm })
+    Ok(DisplayMode { x: now.x, y: now.y, width: out_w, height: out_h, refresh, rotation, raw: dm })
 }
 
 /// Ask Windows whether a mode would work, without applying it.

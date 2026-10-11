@@ -18,7 +18,24 @@ use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 /// Map of GDI device name (`\\.\DISPLAY1`) -> friendly monitor name.
 /// Returns an empty map if anything fails; callers fall back gracefully.
 pub fn friendly_names() -> HashMap<String, String> {
-    let mut out = HashMap::new();
+    targets().into_iter().map(|t| (t.gdi, t.name)).collect()
+}
+
+/// Map of GDI device name -> monitor device path
+/// (`\\?\DISPLAY#SDC4161#4&...#{guid}`), used to find the monitor's EDID.
+pub fn device_paths() -> HashMap<String, String> {
+    targets().into_iter().map(|t| (t.gdi, t.path)).collect()
+}
+
+struct Target {
+    gdi: String,
+    name: String,
+    path: String,
+}
+
+/// Every active monitor Windows is driving, with its names.
+fn targets() -> Vec<Target> {
+    let mut out = Vec::new();
     unsafe {
         let mut path_count = 0u32;
         let mut mode_count = 0u32;
@@ -66,8 +83,9 @@ pub fn friendly_names() -> HashMap<String, String> {
 
             let gdi = wide_to_string(&source.viewGdiDeviceName);
             let name = wide_to_string(&target.monitorFriendlyDeviceName);
-            if !gdi.is_empty() && !name.is_empty() {
-                out.insert(gdi, name);
+            let path = wide_to_string(&target.monitorDevicePath);
+            if !gdi.is_empty() {
+                out.push(Target { gdi, name, path });
             }
         }
     }
