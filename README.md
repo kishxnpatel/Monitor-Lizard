@@ -1,37 +1,27 @@
 # 🦎 Monitor Lizard
 
-The monitor settings Windows forgot about. Tiny, free, no background process.
+Windows display settings, plus the stuff Windows forgot about.
 
-Open it, change things, close it. Nothing keeps running.
+Brightness and contrast on external monitors, input switching, refresh rate up front instead of buried in Advanced display. Open it, change things, close it. Nothing stays running.
 
-## Status
+<img src="docs/screenshot.png" alt="Monitor Lizard" width="500">
 
-**v0.1 backend (command line).** The UI comes next.
+## Does
 
-## Use it
+- Brightness (laptop and external monitors)
+- Contrast and input switching (external, over DDC/CI)
+- Resolution, refresh rate, orientation
+- HDR, color profile
+- Extend / duplicate, main display
+- Auto-reverts display changes after 15s unless you keep them
 
-```
-monitor-lizard list
-monitor-lizard set 1 --brightness 40
-monitor-lizard set all --brightness 70 --contrast 60
-monitor-lizard set 2 --input hdmi1
-monitor-lizard inputs
-```
-
-## Build
+## Run
 
 ```
-cargo build --release
+cargo run --bin monitor-lizard-ui    # window
+cargo run -- help                    # command line
 ```
 
-The app ends up in `target\release\monitor-lizard.exe`.
+External monitor not responding? Turn on DDC/CI in the monitor's menu.
 
-## Notes
-
-- Works with external monitors over **DDC/CI**. Turn DDC/CI on in your monitor's menu if it's off.
-- Some docks and USB-C hubs (especially DisplayLink) block DDC/CI.
-- Laptop built-in screens: brightness works (through Windows WMI). Contrast and input are external-monitor only.
-
-## License
-
-MIT
+MIT · made with [Slint](https://slint.dev)
