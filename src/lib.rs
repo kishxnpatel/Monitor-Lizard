@@ -3,6 +3,7 @@
 //! The command-line tool (`main.rs`) and the future UI both use this crate,
 //! so all the Windows-specific code lives here and nowhere else.
 
+pub mod display;
 #[cfg(windows)]
 mod laptop;
 #[cfg(not(windows))]

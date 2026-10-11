@@ -4,24 +4,47 @@
 //!   monitor-lizard set 1 --brightness 40
 //!   monitor-lizard set all --brightness 70 --contrast 60
 //!   monitor-lizard set 2 --input hdmi1
+//!   monitor-lizard set 1 --resolution 1920x1080 --refresh 60 --rotate portrait
 
+use std::io::Write;
 use std::process::ExitCode;
+use std::sync::mpsc;
+use std::time::Duration;
 
+use monitor_lizard::display::{self, Change, Rotation};
 use monitor_lizard::{vcp, Monitors};
+
+/// How long a display change waits for "yes" before snapping back.
+const KEEP_SECONDS: u64 = 15;
 
 const HELP: &str = "\
 Monitor Lizard - the monitor settings Windows forgot about.
 
 USAGE:
   monitor-lizard list
-  monitor-lizard set <number|all> [--brightness 0-100] [--contrast 0-100] [--input NAME]
+  monitor-lizard modes [number]
+  monitor-lizard set <number|all> [options]
   monitor-lizard inputs
   monitor-lizard help
+
+SET OPTIONS:
+  --brightness 0-100
+  --contrast 0-100        (external monitors)
+  --input NAME            (external monitors)
+  --resolution WxH        e.g. 1920x1080
+  --refresh HZ            e.g. 60
+  --rotate NAME           landscape, portrait, landscape-flipped, portrait-flipped
+  --yes                   keep display changes without asking
 
 EXAMPLES:
   monitor-lizard set 1 --brightness 40
   monitor-lizard set all --brightness 70 --contrast 60
   monitor-lizard set 2 --input hdmi1
+  monitor-lizard set 1 --resolution 1920x1080 --refresh 60
+  monitor-lizard set 2 --rotate portrait
+
+Display changes (resolution, refresh, rotate) snap back after 15 seconds
+unless you press Y, so a bad setting can't leave you stuck.
 
 INPUT NAMES:
   hdmi1, hdmi2, dp1, dp2, usbc, dvi1, vga1, or a raw value like 0x11
@@ -32,6 +55,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         None | Some("list") | Some("ls") => list(),
         Some("set") => set(&args[1..]),
+        Some("modes") => modes(args.get(1).map(String::as_str)),
         Some("doctor") => doctor(),
         Some("inputs") => {
             for (value, name) in vcp::INPUTS {
@@ -68,6 +92,9 @@ fn list() -> Result<(), String> {
     for m in &monitors.0 {
         let primary = if m.primary { "  (primary)" } else { "" };
         println!("{}  {}  {}x{}{}", m.index, m.name, m.width, m.height, primary);
+        if let Ok(mode) = display::current(&m.device) {
+            println!("   {}Hz   {}", mode.refresh, mode.rotation.name());
+        }
 
         if m.builtin {
             let b = m.brightness().map(|v| format!("{v}%")).unwrap_or("-".into());
@@ -103,6 +130,23 @@ fn doctor() -> Result<(), String> {
     Ok(())
 }
 
+/// Supported resolutions and refresh rates.
+fn modes(which: Option<&str>) -> Result<(), String> {
+    let monitors = Monitors::detect();
+    for m in monitors.select(which.unwrap_or("all"))? {
+        println!("{}  {}", m.index, m.name);
+        let now = display::current(&m.device).ok();
+        for r in display::resolutions(&m.device) {
+            let is_now = now.as_ref().is_some_and(|n| {
+                (n.width.max(n.height), n.width.min(n.height)) == (r.width, r.height)
+            });
+            let mark = if is_now { "  <- current" } else { "" };
+            println!("   {}x{}   {}{}", r.width, r.height, display::rates(&r.refresh_rates), mark);
+        }
+    }
+    Ok(())
+}
+
 fn set(args: &[String]) -> Result<(), String> {
     let which = args
         .first()
@@ -111,9 +155,15 @@ fn set(args: &[String]) -> Result<(), String> {
     let mut brightness = None;
     let mut contrast = None;
     let mut input = None;
+    let mut change = Change::default();
+    let mut yes = false;
 
     let mut rest = args[1..].iter();
     while let Some(flag) = rest.next() {
+        if flag == "--yes" || flag == "-y" {
+            yes = true;
+            continue;
+        }
         let value = rest
             .next()
             .ok_or_else(|| format!("{flag} needs a value"))?;
@@ -125,12 +175,27 @@ fn set(args: &[String]) -> Result<(), String> {
                     format!("Unknown input '{value}'. Run `monitor-lizard inputs`.")
                 })?)
             }
+            "--resolution" | "-r" => {
+                change.resolution = Some(display::parse_resolution(value).ok_or_else(|| {
+                    format!("'{value}' isn't a resolution. Use WIDTHxHEIGHT, e.g. 1920x1080.")
+                })?)
+            }
+            "--refresh" | "--hz" => {
+                change.refresh = Some(value.trim_end_matches("Hz").trim_end_matches("hz").parse().map_err(
+                    |_| format!("'{value}' isn't a refresh rate. Use a number like 60."),
+                )?)
+            }
+            "--rotate" => {
+                change.rotation = Some(Rotation::parse(value).ok_or_else(|| {
+                    format!("'{value}' isn't a rotation. Use landscape, portrait, landscape-flipped or portrait-flipped.")
+                })?)
+            }
             _ => return Err(format!("Unknown option '{flag}'. Try `monitor-lizard help`.")),
         }
     }
 
-    if brightness.is_none() && contrast.is_none() && input.is_none() {
-        return Err("Nothing to change. Add --brightness, --contrast or --input.".into());
+    if brightness.is_none() && contrast.is_none() && input.is_none() && change.is_empty() {
+        return Err("Nothing to change. Try `monitor-lizard help` for options.".into());
     }
 
     let monitors = Monitors::detect();
@@ -156,11 +221,91 @@ fn set(args: &[String]) -> Result<(), String> {
         }
     }
 
+    if !change.is_empty() && !apply_display(&monitors, which, &change, yes)? {
+        failed = true;
+    }
+
     if failed {
         Err("Some changes didn't apply.".into())
     } else {
         Ok(())
     }
+}
+
+/// Apply resolution / refresh / rotation, then revert unless confirmed.
+/// Returns Ok(false) only if something failed. Reverting is not a failure.
+fn apply_display(monitors: &Monitors, which: &str, change: &Change, yes: bool) -> Result<bool, String> {
+    let mut devices: Vec<(usize, String, String)> = Vec::new();
+    for m in monitors.select(which)? {
+        if !devices.iter().any(|(_, _, d)| *d == m.device) {
+            devices.push((m.index, m.name.clone(), m.device.clone()));
+        }
+    }
+
+    // Plan and test everything first, so nothing changes if any of it is invalid.
+    let mut planned = Vec::new();
+    for (index, name, device) in &devices {
+        let before = display::current(device)?;
+        let after = display::plan(device, change).map_err(|e| format!("{index} {name}: {e}"))?;
+        display::test(device, &after).map_err(|e| format!("{index} {name}: {e}"))?;
+        planned.push((index, name, device, before, after));
+    }
+
+    let mut applied = Vec::new();
+    let mut ok = true;
+    for (index, name, device, before, after) in &planned {
+        match display::apply(device, after) {
+            Ok(()) => {
+                println!(
+                    "{index}  {name}: {}x{} {}Hz {}",
+                    after.width, after.height, after.refresh, after.rotation.name()
+                );
+                applied.push((device, before));
+            }
+            Err(e) => {
+                ok = false;
+                eprintln!("🦎 {index} {name}: {e}");
+            }
+        }
+    }
+
+    if applied.is_empty() || yes || confirm_keep() {
+        return Ok(ok);
+    }
+
+    for (device, before) in applied {
+        if let Err(e) = display::apply(device, before) {
+            eprintln!("🦎 Couldn't revert {device}: {e}");
+        }
+    }
+    println!("Reverted. Nothing changed.");
+    Ok(ok)
+}
+
+/// "Keep these settings?" with a countdown. Anything but Y means no.
+fn confirm_keep() -> bool {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        let _ = tx.send(line);
+    });
+
+    for left in (1..=KEEP_SECONDS).rev() {
+        print!("\rKeep these display settings? [y/N]  reverting in {left:>2}s ");
+        let _ = std::io::stdout().flush();
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(answer) => {
+                println!();
+                return answer.trim().eq_ignore_ascii_case("y")
+                    || answer.trim().eq_ignore_ascii_case("yes");
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(_) => break,
+        }
+    }
+    println!();
+    false
 }
 
 fn percent(value: &str) -> Result<u8, String> {
