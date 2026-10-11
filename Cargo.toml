@@ -4,6 +4,24 @@ version = "0.1.0"
 edition = "2021"
 description = "A tiny, free tool for the monitor settings Windows forgot about."
 license = "MIT"
+default-run = "monitor-lizard"
+build = "build.rs"
+
+[[bin]]
+name = "monitor-lizard"
+path = "src/main.rs"
+
+[[bin]]
+name = "monitor-lizard-ui"
+path = "src/bin/monitor-lizard-ui.rs"
+
+[dependencies.slint]
+version = "1.18"
+default-features = false
+features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "accessibility"]
+
+[build-dependencies]
+slint-build = "1.18"
 
 [dependencies.windows-sys]
 version = "0.61"
@@ -13,6 +31,7 @@ features = [
   "Win32_Devices_Display",
   "Win32_UI_HiDpi",
   "Win32_System_Registry",
+  "Win32_UI_ColorSystem",
 ]
 
 [target.'cfg(windows)'.dependencies.windows]

@@ -1,0 +1,436 @@
+// Monitor Lizard: a compact copy of Windows 11 Settings > Display.
+
+import { Slider, ComboBox, Button, ScrollView, Switch, Palette } from "std-widgets.slint";
+
+// Windows 11 Settings colours, light and dark.
+global Theme {
+    // Windows "Text size" (Accessibility). 1.0 = 100%. Set from Rust.
+    in-out property <float> text-scale: 1.0;
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    out property <color> bg: dark ? #202020 : #f3f3f3;
+    out property <color> card: dark ? #2b2b2b : #fbfbfb;
+    out property <color> card-hover: dark ? #323232 : #f5f5f5;
+    out property <color> card-border: dark ? #1d1d1d : #e5e5e5;
+    out property <color> text: dark ? #ffffff : #1b1b1b;
+    out property <color> text-2: dark ? #c8c8c8 : #5f5f5f;
+}
+
+// A glyph from Segoe Fluent Icons, the icon font Settings uses.
+component Icon inherits Text {
+    font-family: "Segoe Fluent Icons";
+    font-size: 16px * Theme.text-scale;
+    color: Theme.text;
+    vertical-alignment: center;
+    horizontal-alignment: center;
+    width: 20px;
+}
+
+component SectionTitle inherits Text {
+    font-size: 14px * Theme.text-scale;
+    font-weight: 600;
+    color: Theme.text;
+}
+
+// One settings row: icon, title, optional subtitle, control on the right.
+component Row inherits Rectangle {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> clickable: false;
+    callback clicked;
+
+    min-height: root.subtitle == "" ? 56px : 68px;
+    background: touch.has-hover && root.clickable ? Theme.card-hover : Theme.card;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.card-border;
+
+    touch := TouchArea {
+        enabled: root.clickable;
+        mouse-cursor: root.clickable ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 16px;
+        alignment: stretch;
+
+        Icon { text: root.icon; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.title; font-size: 14px * Theme.text-scale; color: Theme.text; }
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                font-size: 12px * Theme.text-scale;
+                color: Theme.text-2;
+                wrap: word-wrap;
+            }
+        }
+        @children
+    }
+}
+
+// Row that opens a Windows Settings page.
+component LinkRow inherits Row {
+    clickable: true;
+    VerticalLayout {
+        alignment: center;
+        Icon { text: "\u{E76C}"; font-size: 12px * Theme.text-scale; color: Theme.text-2; }
+    }
+}
+
+export { Theme }
+
+export component AppWindow inherits Window {
+    title: "Monitor Lizard";
+    default-font-family: "Segoe UI Variable Text";
+    default-font-size: 14px * Theme.text-scale;
+    background: Theme.bg;
+    min-width: 440px;
+    min-height: 480px;
+    preferred-width: 560px;
+    preferred-height: 720px;
+
+    // Monitor picker
+    in property <[string]> monitors;
+    in-out property <int> monitor-index;
+    in property <string> monitor-subtitle;
+
+    // Brightness & colour
+    in property <bool> brightness-available;
+    in-out property <float> brightness;
+    in property <bool> has-contrast;
+    in-out property <float> contrast;
+
+    // Scale & layout
+    in property <[string]> resolutions;
+    in-out property <int> resolution-index;
+    in property <[string]> refresh-rates;
+    in-out property <int> refresh-index;
+    in-out property <int> rotation-index;
+
+    // HDR, colour profile, multiple displays
+    in property <bool> hdr-supported;
+    in-out property <bool> hdr-on;
+    in property <[string]> color-profiles;
+    in-out property <int> color-profile-index;
+    in property <int> monitor-count;
+    in property <bool> is-primary;
+    in property <[string]> projections;
+    in-out property <int> projection-index;
+
+    // Bottom bar
+    in property <bool> dirty;
+    in property <bool> confirming;
+    in property <int> seconds-left;
+    in property <string> status;
+
+    callback monitor-changed(int);
+    callback brightness-moved(float);
+    callback contrast-moved(float);
+    callback resolution-changed(int);
+    callback selection-changed();
+    callback apply();
+    callback discard();
+    callback keep();
+    callback undo();
+    callback open-settings(string);
+    callback hdr-toggled(bool);
+    callback color-profile-changed(int);
+    callback projection-changed(int);
+    callback make-primary();
+
+    VerticalLayout {
+        // Header
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-top: 20px;
+            padding-bottom: 12px;
+            spacing: 12px;
+            alignment: start;
+            Text {
+                text: "Monitor Lizard";
+                font-size: 28px * Theme.text-scale;
+                font-weight: 600;
+                color: Theme.text-2;
+            }
+            Text {
+                text: "\u{E76C}";
+                font-family: "Segoe Fluent Icons";
+                font-size: 14px * Theme.text-scale;
+                color: Theme.text-2;
+                vertical-alignment: center;
+            }
+            Text {
+                text: "Display";
+                font-size: 28px * Theme.text-scale;
+                font-weight: 600;
+                color: Theme.text;
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding-left: 24px;
+                padding-right: 24px;
+                padding-bottom: 24px;
+                spacing: 4px;
+                alignment: start;
+
+                Row {
+                    icon: "\u{E7F4}";
+                    title: "Monitor";
+                    subtitle: root.monitor-subtitle;
+                    VerticalLayout {
+                        alignment: center;
+                        ComboBox {
+                            width: 230px;
+                            model: root.monitors;
+                            current-index <=> root.monitor-index;
+                            selected => { root.monitor-changed(root.monitor-index); }
+                        }
+                    }
+                }
+
+                Rectangle { height: 16px; }
+                SectionTitle { text: "Brightness & color"; }
+                Rectangle { height: 4px; }
+
+                Row {
+                    icon: "\u{E706}";
+                    title: "Brightness";
+                    subtitle: root.brightness-available ? "" : "Not available on this display";
+                    if root.brightness-available: HorizontalLayout {
+                        spacing: 12px;
+                        alignment: end;
+                        Slider {
+                            width: 200px;
+                            minimum: 0;
+                            maximum: 100;
+                            value <=> root.brightness;
+                            changed(v) => { root.brightness-moved(v); }
+                        }
+                        Text {
+                            width: 36px;
+                            text: round(root.brightness) + "%";
+                            color: Theme.text-2;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+
+                if root.has-contrast: Row {
+                    icon: "\u{E793}";
+                    title: "Contrast";
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: end;
+                        Slider {
+                            width: 200px;
+                            minimum: 0;
+                            maximum: 100;
+                            value <=> root.contrast;
+                            changed(v) => { root.contrast-moved(v); }
+                        }
+                        Text {
+                            width: 36px;
+                            text: round(root.contrast) + "%";
+                            color: Theme.text-2;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+
+                LinkRow {
+                    icon: "\u{E708}";
+                    title: "Night light";
+                    subtitle: "Use warmer colors to help block blue light";
+                    clicked => { root.open-settings("ms-settings:nightlight"); }
+                }
+                if root.color-profiles.length > 0: Row {
+                    icon: "\u{E790}";
+                    title: "Color profile";
+                    subtitle: "Determine how colors appear on your screen";
+                    VerticalLayout {
+                        alignment: center;
+                        ComboBox {
+                            width: 200px;
+                            model: root.color-profiles;
+                            current-index <=> root.color-profile-index;
+                            selected => { root.color-profile-changed(root.color-profile-index); }
+                        }
+                    }
+                }
+                if root.color-profiles.length == 0: LinkRow {
+                    icon: "\u{E790}";
+                    title: "Color profile";
+                    subtitle: "Determine how colors appear on your screen";
+                    clicked => { root.open-settings("ms-settings:display"); }
+                }
+                if root.hdr-supported: Row {
+                    icon: "\u{E7F8}";
+                    title: "HDR";
+                    subtitle: "Your display supports HDR games, videos, and apps";
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: end;
+                        Text {
+                            text: root.hdr-on ? "On" : "Off";
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Switch {
+                                checked <=> root.hdr-on;
+                                toggled => { root.hdr-toggled(self.checked); }
+                            }
+                        }
+                    }
+                }
+                if !root.hdr-supported: LinkRow {
+                    icon: "\u{E7F8}";
+                    title: "HDR";
+                    subtitle: "Not supported on this display";
+                    clicked => { root.open-settings("ms-settings:display-hdr"); }
+                }
+
+                Rectangle { height: 16px; }
+                SectionTitle { text: "Scale & layout"; }
+                Rectangle { height: 4px; }
+
+                LinkRow {
+                    icon: "\u{E71E}";
+                    title: "Scale";
+                    subtitle: "Change the size of text, apps, and other items";
+                    clicked => { root.open-settings("ms-settings:display"); }
+                }
+                Row {
+                    icon: "\u{E740}";
+                    title: "Display resolution";
+                    subtitle: "Adjust the resolution to fit your connected display";
+                    VerticalLayout {
+                        alignment: center;
+                        ComboBox {
+                            width: 250px;
+                            model: root.resolutions;
+                            current-index <=> root.resolution-index;
+                            selected => { root.resolution-changed(root.resolution-index); }
+                        }
+                    }
+                }
+                Row {
+                    icon: "\u{E895}";
+                    title: "Refresh rate";
+                    VerticalLayout {
+                        alignment: center;
+                        ComboBox {
+                            width: 120px;
+                            model: root.refresh-rates;
+                            current-index <=> root.refresh-index;
+                            selected => { root.selection-changed(); }
+                        }
+                    }
+                }
+                Row {
+                    icon: "\u{E7AD}";
+                    title: "Display orientation";
+                    VerticalLayout {
+                        alignment: center;
+                        ComboBox {
+                            width: 170px;
+                            model: ["Landscape", "Portrait", "Landscape (flipped)", "Portrait (flipped)"];
+                            current-index <=> root.rotation-index;
+                            selected => { root.selection-changed(); }
+                        }
+                    }
+                }
+                if root.monitor-count > 1: Row {
+                    icon: "\u{E7F4}";
+                    title: "Multiple displays";
+                    subtitle: "Choose the presentation mode for your displays";
+                    VerticalLayout {
+                        alignment: center;
+                        ComboBox {
+                            width: 250px;
+                            model: root.projections;
+                            current-index <=> root.projection-index;
+                            selected => { root.projection-changed(root.projection-index); }
+                        }
+                    }
+                }
+                if root.monitor-count > 1: Row {
+                    icon: "\u{E734}";
+                    title: "Make this my main display";
+                    subtitle: root.is-primary ? "This is your main display" : "";
+                    VerticalLayout {
+                        alignment: center;
+                        Switch {
+                            checked: root.is-primary;
+                            enabled: !root.is-primary;
+                            toggled => { root.make-primary(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bottom bar
+        Rectangle {
+            height: 64px;
+            background: Theme.card;
+            border-width: 1px;
+            border-color: Theme.card-border;
+
+            if root.confirming: HorizontalLayout {
+                padding-left: 24px;
+                padding-right: 16px;
+                spacing: 8px;
+                Text {
+                    text: "Keep these display settings? Reverting in " + root.seconds-left + "s";
+                    color: Theme.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button { text: "Keep changes"; primary: true; clicked => { root.keep(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button { text: "Revert"; clicked => { root.undo(); } }
+                }
+            }
+
+            if !root.confirming: HorizontalLayout {
+                padding-left: 24px;
+                padding-right: 16px;
+                spacing: 8px;
+                Text {
+                    text: root.status;
+                    color: Theme.text-2;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button { text: "Discard"; enabled: root.dirty; clicked => { root.discard(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button { text: "Apply"; primary: true; enabled: root.dirty; clicked => { root.apply(); } }
+                }
+            }
+        }
+    }
+}

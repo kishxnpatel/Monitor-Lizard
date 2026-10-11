@@ -13,7 +13,7 @@ use windows_sys::Win32::Devices::Display::{
     DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
     DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
 };
-use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LUID};
 
 /// Map of GDI device name (`\\.\DISPLAY1`) -> friendly monitor name.
 /// Returns an empty map if anything fails; callers fall back gracefully.
@@ -27,10 +27,24 @@ pub fn device_paths() -> HashMap<String, String> {
     targets().into_iter().map(|t| (t.gdi, t.path)).collect()
 }
 
+/// The numbers Windows' display APIs use to address one screen.
+#[derive(Clone, Copy)]
+pub struct Ids {
+    pub adapter: LUID,
+    pub source: u32,
+    pub target: u32,
+}
+
+/// Map of GDI device name -> display-config IDs (for HDR and colour profiles).
+pub fn ids() -> HashMap<String, Ids> {
+    targets().into_iter().map(|t| (t.gdi, t.ids)).collect()
+}
+
 struct Target {
     gdi: String,
     name: String,
     path: String,
+    ids: Ids,
 }
 
 /// Every active monitor Windows is driving, with its names.
@@ -60,13 +74,13 @@ fn targets() -> Vec<Target> {
         }
         paths.truncate(path_count as usize);
 
-        for path in &paths {
+        for path_info in &paths {
             // Which \\.\DISPLAYn this path drives
             let mut source = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
             source.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
             source.header.size = size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
-            source.header.adapterId = path.sourceInfo.adapterId;
-            source.header.id = path.sourceInfo.id;
+            source.header.adapterId = path_info.sourceInfo.adapterId;
+            source.header.id = path_info.sourceInfo.id;
             if DisplayConfigGetDeviceInfo(&mut source.header) != 0 {
                 continue;
             }
@@ -75,8 +89,8 @@ fn targets() -> Vec<Target> {
             let mut target = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
             target.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
             target.header.size = size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
-            target.header.adapterId = path.targetInfo.adapterId;
-            target.header.id = path.targetInfo.id;
+            target.header.adapterId = path_info.targetInfo.adapterId;
+            target.header.id = path_info.targetInfo.id;
             if DisplayConfigGetDeviceInfo(&mut target.header) != 0 {
                 continue;
             }
@@ -85,7 +99,12 @@ fn targets() -> Vec<Target> {
             let name = wide_to_string(&target.monitorFriendlyDeviceName);
             let path = wide_to_string(&target.monitorDevicePath);
             if !gdi.is_empty() {
-                out.push(Target { gdi, name, path });
+                let ids = Ids {
+                    adapter: path_info.targetInfo.adapterId,
+                    source: path_info.sourceInfo.id,
+                    target: path_info.targetInfo.id,
+                };
+                out.push(Target { gdi, name, path, ids });
             }
         }
     }

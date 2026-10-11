@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use monitor_lizard::advanced::{self, Projection};
 use monitor_lizard::display::{self, Change, Rotation};
 use monitor_lizard::{vcp, Monitors};
 
@@ -24,6 +25,10 @@ USAGE:
   monitor-lizard list
   monitor-lizard modes [number]
   monitor-lizard layout
+  monitor-lizard hdr <number> [on|off]
+  monitor-lizard primary <number>
+  monitor-lizard project [extend|duplicate|internal|external]
+  monitor-lizard colors <number> [PROFILE NAME]
   monitor-lizard set <number|all> [options]
   monitor-lizard inputs
   monitor-lizard help
@@ -58,6 +63,10 @@ fn main() -> ExitCode {
         Some("set") => set(&args[1..]),
         Some("modes") => modes(args.get(1).map(String::as_str)),
         Some("layout") => layout(),
+        Some("hdr") => hdr(&args[1..]),
+        Some("primary") => primary(&args[1..]),
+        Some("project") => project(&args[1..]),
+        Some("colors") | Some("colours") => colors(&args[1..]),
         Some("doctor") => doctor(),
         Some("inputs") => {
             for (value, name) in vcp::INPUTS {
@@ -128,6 +137,89 @@ fn doctor() -> Result<(), String> {
             Err(e) => e,
         };
         println!("  {} {} [{}] builtin={}  {}", m.index, m.name, m.device, m.builtin, ddc);
+    }
+    Ok(())
+}
+
+fn one_monitor<'a>(monitors: &'a Monitors, which: Option<&String>) -> Result<&'a monitor_lizard::Monitor, String> {
+    let which = which.ok_or("Which monitor? Add its number, e.g. 1")?;
+    let list = monitors.select(which)?;
+    list.into_iter().next().ok_or_else(|| "Pick one monitor, not 'all'.".into())
+}
+
+/// Show or switch HDR.
+fn hdr(args: &[String]) -> Result<(), String> {
+    let monitors = Monitors::detect();
+    let m = one_monitor(&monitors, args.first())?;
+    let state = advanced::hdr(&m.device)?;
+    if !state.supported {
+        return Err(format!("{} doesn't support HDR.", m.name));
+    }
+    match args.get(1).map(|s| s.to_ascii_lowercase()) {
+        None => {
+            println!("{}  {}: HDR {}", m.index, m.name, if state.enabled { "on" } else { "off" });
+            Ok(())
+        }
+        Some(v) if v == "on" || v == "off" => {
+            advanced::set_hdr(&m.device, v == "on")?;
+            println!("{}  {}: HDR {v}", m.index, m.name);
+            Ok(())
+        }
+        Some(v) => Err(format!("'{v}' should be on or off.")),
+    }
+}
+
+/// Make a monitor the main display.
+fn primary(args: &[String]) -> Result<(), String> {
+    let monitors = Monitors::detect();
+    let m = one_monitor(&monitors, args.first())?;
+    if m.primary {
+        println!("{}  {} is already the main display.", m.index, m.name);
+        return Ok(());
+    }
+    let devices: Vec<String> = monitor_lizard::layout::read(&monitors).into_iter().map(|s| s.device).collect();
+    advanced::make_primary(&m.device, &devices)?;
+    println!("{}  {} is now the main display.", m.index, m.name);
+    Ok(())
+}
+
+/// Win+P modes: extend, duplicate, one screen only.
+fn project(args: &[String]) -> Result<(), String> {
+    match args.first() {
+        None => {
+            match advanced::projection() {
+                Some(p) => println!("{}", p.name()),
+                None => println!("Only one screen is connected."),
+            }
+            Ok(())
+        }
+        Some(v) => {
+            let mode = Projection::parse(v)
+                .ok_or_else(|| format!("'{v}' isn't a mode. Use extend, duplicate, internal or external."))?;
+            advanced::set_projection(mode)?;
+            println!("{}", mode.name());
+            Ok(())
+        }
+    }
+}
+
+/// List colour profiles, or set one.
+fn colors(args: &[String]) -> Result<(), String> {
+    let monitors = Monitors::detect();
+    let m = one_monitor(&monitors, args.first())?;
+    if args.len() > 1 {
+        let name = args[1..].join(" ");
+        advanced::set_color_profile(&m.device, &name)?;
+        println!("{}  {}: color profile {name}", m.index, m.name);
+        return Ok(());
+    }
+    let (list, current) = advanced::color_profiles(&m.device)?;
+    if list.is_empty() {
+        println!("{}  {}: no color profiles installed (Windows uses its default).", m.index, m.name);
+    }
+    for p in list {
+        let mark = if current.as_deref() == Some(p.as_str()) { "  <- in use" } else { "" };
+        println!("   {p}{mark}");
     }
     Ok(())
 }

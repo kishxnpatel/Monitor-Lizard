@@ -8,8 +8,9 @@
 use windows::core::{BSTR, PCWSTR, VARIANT, w};
 use windows::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoInitializeSecurity, CLSCTX_INPROC_SERVER,
-    COINIT_MULTITHREADED, EOAC_NONE, RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE,
+    CoCreateInstance, CoInitializeEx, CoInitializeSecurity, CoSetProxyBlanket,
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
+    RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE,
 };
 use windows::Win32::System::Wmi::{
     IEnumWbemClassObject, IWbemClassObject, IWbemLocator, IWbemServices, WbemLocator,
@@ -37,7 +38,7 @@ fn connect() -> Result<IWbemServices, String> {
         );
         let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
             .map_err(|e| format!("WMI unavailable: {e}"))?;
-        locator
+        let services = locator
             .ConnectServer(
                 &BSTR::from("ROOT\\WMI"),
                 &BSTR::new(),
@@ -47,7 +48,24 @@ fn connect() -> Result<IWbemServices, String> {
                 &BSTR::new(),
                 None,
             )
-            .map_err(|e| format!("WMI unavailable: {e}"))
+            .map_err(|e| format!("WMI unavailable: {e}"))?;
+
+        // If something else in the process (like the UI window) set up COM
+        // security first, CoInitializeSecurity above is ignored. Setting the
+        // permission level on this one connection always works.
+        const RPC_C_AUTHN_WINNT: u32 = 10;
+        const RPC_C_AUTHZ_NONE: u32 = 0;
+        let _ = CoSetProxyBlanket(
+            &services,
+            RPC_C_AUTHN_WINNT,
+            RPC_C_AUTHZ_NONE,
+            PCWSTR::null(),
+            RPC_C_AUTHN_LEVEL_CALL,
+            RPC_C_IMP_LEVEL_IMPERSONATE,
+            None,
+            EOAC_NONE,
+        );
+        Ok(services)
     }
 }
 
@@ -88,8 +106,28 @@ pub fn available() -> bool {
     get().is_ok()
 }
 
+/// Run WMI work on its own thread. WMI needs COM in "multithreaded" mode,
+/// but the UI's main thread must stay "single-threaded" for the window
+/// system, so we never initialise COM on the caller's thread.
+fn on_own_thread<T: Send + 'static>(work: fn() -> Result<T, String>) -> Result<T, String> {
+    std::thread::spawn(work)
+        .join()
+        .unwrap_or_else(|_| Err("WMI crashed".into()))
+}
+
 /// Current built-in screen brightness, 0-100%.
 pub fn get() -> Result<u8, String> {
+    on_own_thread(get_inner)
+}
+
+/// Set built-in screen brightness, 0-100%.
+pub fn set(percent: u8) -> Result<(), String> {
+    std::thread::spawn(move || set_inner(percent))
+        .join()
+        .unwrap_or_else(|_| Err("WMI crashed".into()))
+}
+
+fn get_inner() -> Result<u8, String> {
     let services = connect()?;
     let obj = first(
         &services,
@@ -98,8 +136,7 @@ pub fn get() -> Result<u8, String> {
     Ok(number(&obj, w!("CurrentBrightness"))?.min(100) as u8)
 }
 
-/// Set built-in screen brightness, 0-100%.
-pub fn set(percent: u8) -> Result<(), String> {
+fn set_inner(percent: u8) -> Result<(), String> {
     let services = connect()?;
     unsafe {
         // Which screen instance to call the method on
